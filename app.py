@@ -48,7 +48,7 @@ def build_ydl_opts(tmpdir: Path, mp3_bitrate_k: int, progress_cb):
         "noplaylist": True,
         "quiet": False,  # Enable output for debugging
         "no_warnings": False,  # Show warnings for debugging
-        "format": "bestaudio/best",
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
         "progress_hooks": [progress_cb],
         "postprocessors": [
             {
@@ -66,6 +66,30 @@ def build_ydl_opts(tmpdir: Path, mp3_bitrate_k: int, progress_cb):
         "extract_flat": False,
         "writethumbnail": False,
         "writeinfojson": False,
+        # Cloud-friendly options to avoid 403 errors
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+        },
+        # Use web client that's less likely to be blocked
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web", "tv_embedded"],
+                "skip": ["hls", "dash"],
+            }
+        },
+        # Retry settings for better reliability
+        "retries": 3,
+        "fragment_retries": 3,
+        "retry_sleep_functions": {"http": lambda n: min(4 ** n, 60)},
+        # Avoid formats that commonly cause 403 errors
+        "prefer_free_formats": True,
+        "format_sort": ["quality", "res", "fps", "codec:h264", "size", "br", "asr", "proto"],
     }
 
 def human_size(num: float) -> str:
@@ -146,7 +170,35 @@ def main():
             with ydl.YoutubeDL(opts) as y:
                 info = y.extract_info(url, download=True)
         except Exception as e:
-            st.error(f"Download failed: {e}")
+            error_msg = str(e)
+            if "403" in error_msg or "Forbidden" in error_msg:
+                st.error("""
+                **Download failed due to access restrictions (403 Forbidden)**
+                
+                This commonly occurs when deploying to cloud services like Streamlit Cloud due to IP-based restrictions from YouTube.
+                
+                **Possible solutions:**
+                - Try a different YouTube video
+                - The video might be geo-restricted or require login
+                - Some cloud providers' IP ranges are blocked by YouTube
+                - Try deploying to a different cloud platform (Railway, Render, Heroku, etc.)
+                
+                **For developers:** Consider implementing a proxy service or using YouTube API for production deployments.
+                """)
+            elif "Unable to extract" in error_msg or "Video unavailable" in error_msg:
+                st.error(f"""
+                **Video extraction failed**
+                
+                The video might be:
+                - Private or deleted
+                - Age-restricted
+                - Geo-blocked in this region
+                - From a livestream or premium content
+                
+                Error details: {error_msg}
+                """)
+            else:
+                st.error(f"Download failed: {error_msg}")
             st.stop()
 
         # Find the resulting MP3 file
